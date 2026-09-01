@@ -1,6 +1,7 @@
 package org.jellyfin.mobile.channelflow
 
 import android.net.Uri
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -12,9 +13,11 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import timber.log.Timber
+import java.net.Inet4Address
 import java.time.LocalDateTime
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -42,11 +45,12 @@ class ChannelFlowGuideRepository(
 	private var programs: List<ChannelFlowProgram> = emptyList()
 	private var loadedAt: Long = 0L
 	private val http = OkHttpClient.Builder()
-		.connectTimeout(30, TimeUnit.SECONDS)
+		.connectTimeout(15, TimeUnit.SECONDS)
 		.readTimeout(3, TimeUnit.MINUTES)
 		.writeTimeout(30, TimeUnit.SECONDS)
 		.followRedirects(true)
 		.followSslRedirects(true)
+		.dns(Ipv4FirstDns)
 		.build()
 
 	fun prefetchLatest() {
@@ -197,14 +201,13 @@ class ChannelFlowGuideRepository(
 			if (!force && isFresh()) {
 				return@withLock loadJob?.takeIf { it.isActive } ?: completedJob()
 			}
-			if (force) loadJob?.cancel()
 			loadJob?.takeIf { it.isActive } ?: startLoad(connection)
 		}
 	}
 
 	private fun startLoad(connection: ChannelFlowConnection): Job {
-		channelsReady.value = false
-		programsReady.value = false
+		if (channels.isEmpty()) channelsReady.value = false
+		if (programs.isEmpty()) programsReady.value = false
 		return scope.launch {
 			load(connection)
 		}.also { loadJob = it }
@@ -214,35 +217,35 @@ class ChannelFlowGuideRepository(
 		supervisorScope {
 			launch {
 				try {
-					val nextChannels = runCatching { M3uParser.parse(fetchText(connection, connection.m3uUrl)) }
-						.onFailure { Timber.w(it, "Unable to load ChannelFlow M3U") }
-						.getOrDefault(emptyList())
+					val nextChannels = M3uParser.parse(fetchText(connection, connection.m3uUrl))
 					mutex.withLock { channels = nextChannels }
 					Timber.i("Loaded ${nextChannels.size} ChannelFlow channels")
+				} catch (_: CancellationException) {
+					return@launch
+				} catch (error: Exception) {
+					Timber.w("Unable to load ChannelFlow M3U: ${error.javaClass.simpleName}: ${error.message}")
 				} finally {
 					channelsReady.value = true
 				}
 			}
 			launch {
 				try {
-					val nextPrograms = runCatching { XmltvParser.parse(fetchText(connection, connection.epgUrl)) }
-						.onFailure { Timber.w(it, "Unable to load ChannelFlow XMLTV") }
-						.getOrNull()
-					if (nextPrograms != null) {
-						mutex.withLock {
-							programs = nextPrograms
-							loadedAt = System.currentTimeMillis()
-							ChannelFlowGuideClock.updateCoverage(nextPrograms)
-						}
-						val deviceNow = LocalDateTime.now()
-						val guideNow = ChannelFlowGuideClock.now()
-						if (guideNow != deviceNow) {
-							Timber.w("Device clock $deviceNow is outside XMLTV coverage; guide using $guideNow")
-						}
-						Timber.i("Loaded ${nextPrograms.size} ChannelFlow XMLTV programmes")
-					} else {
-						Timber.w("ChannelFlow XMLTV fetch/parse failed; guide listings not updated")
+					val nextPrograms = XmltvParser.parse(fetchText(connection, connection.epgUrl))
+					mutex.withLock {
+						programs = nextPrograms
+						loadedAt = System.currentTimeMillis()
+						ChannelFlowGuideClock.updateCoverage(nextPrograms)
 					}
+					val deviceNow = LocalDateTime.now()
+					val guideNow = ChannelFlowGuideClock.now()
+					if (guideNow != deviceNow) {
+						Timber.w("Device clock $deviceNow is outside XMLTV coverage; guide using $guideNow")
+					}
+					Timber.i("Loaded ${nextPrograms.size} ChannelFlow XMLTV programmes")
+				} catch (_: CancellationException) {
+					return@launch
+				} catch (error: Exception) {
+					Timber.w("Unable to load ChannelFlow XMLTV: ${error.javaClass.simpleName}: ${error.message}")
 				} finally {
 					programsReady.value = true
 				}
@@ -296,6 +299,11 @@ class ChannelFlowGuideRepository(
 
 		private fun redact(url: String): String = url.replace(Regex("apiKey=[^&]*", RegexOption.IGNORE_CASE), "apiKey=***")
 	}
+}
+
+private object Ipv4FirstDns : Dns {
+	override fun lookup(hostname: String) =
+		Dns.SYSTEM.lookup(hostname).sortedBy { address -> if (address is Inet4Address) 0 else 1 }
 }
 
 internal fun nextChannelWithContent(

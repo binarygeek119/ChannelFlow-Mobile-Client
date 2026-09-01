@@ -34,7 +34,7 @@ android {
         applicationId = "org.channelflow.mobile"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionName = project.getVersionName("0.0.3")
+        versionName = project.getVersionName("0.0.4")
         versionCode = getVersionCode(versionName!!)
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -134,7 +134,7 @@ android {
     }
 }
 
-base.archivesName.set("ChannelFlow-v${project.getVersionName("0.0.3")}")
+base.archivesName.set("ChannelFlow-v${project.getVersionName("0.0.4")}")
 
 dependencies {
     val proprietaryImplementation by configurations
