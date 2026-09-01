@@ -149,18 +149,8 @@ class ChannelFlowGuideRepository(
 		}
 	}
 
-	fun adjacentChannel(currentId: UUID, higher: Boolean): ChannelFlowChannel? {
-		val sorted = channels
-			.filter { it.hasPlayableStream() }
-			.sortedWith(
-				compareBy<ChannelFlowChannel> { ChannelNumber.parse(it.number) ?: ChannelNumber(Int.MAX_VALUE, 0) }
-					.thenBy { it.name }
-			)
-		val index = sorted.indexOfFirst { it.id == currentId }
-		if (index < 0) return sorted.firstOrNull()
-		val next = if (higher) index + 1 else index - 1
-		return sorted.getOrNull(next.coerceIn(0, sorted.lastIndex))
-	}
+	fun adjacentChannel(currentId: UUID, higher: Boolean): ChannelFlowChannel? =
+		nextChannelWithContent(channels, programs, ChannelFlowGuideClock.now(), currentId, higher)
 
 	fun clear() {
 		loadJob?.cancel()
@@ -306,4 +296,35 @@ class ChannelFlowGuideRepository(
 
 		private fun redact(url: String): String = url.replace(Regex("apiKey=[^&]*", RegexOption.IGNORE_CASE), "apiKey=***")
 	}
+}
+
+internal fun nextChannelWithContent(
+	channels: List<ChannelFlowChannel>,
+	programs: List<ChannelFlowProgram>,
+	now: LocalDateTime,
+	currentId: UUID,
+	higher: Boolean,
+): ChannelFlowChannel? {
+	val sorted = channels
+		.filter { it.hasPlayableStream() }
+		.sortedWith(
+			compareBy<ChannelFlowChannel> { ChannelNumber.parse(it.number) ?: ChannelNumber(Int.MAX_VALUE, 0) }
+				.thenBy { it.name },
+		)
+	if (sorted.isEmpty()) return null
+	val index = sorted.indexOfFirst { it.id == currentId }.let { found -> if (found < 0) 0 else found }
+	val liveIds = programs
+		.asSequence()
+		.filter { it.start <= now && it.end > now }
+		.map { it.channelId }
+		.toHashSet()
+	val step = if (higher) 1 else -1
+	var neighbor: ChannelFlowChannel? = null
+	for (offset in 1 until sorted.size) {
+		val candidate = sorted[(index + step * offset).mod(sorted.size)]
+		if (candidate.id == currentId) break
+		if (neighbor == null) neighbor = candidate
+		if (candidate.id in liveIds) return candidate
+	}
+	return neighbor
 }

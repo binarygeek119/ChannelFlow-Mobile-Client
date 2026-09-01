@@ -4,13 +4,12 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
-import android.view.LayoutInflater
-import android.view.View
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
-import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.Icon
@@ -30,31 +29,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.common.util.Util
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.extractor.DefaultExtractorsFactory
-import androidx.media3.extractor.ts.TsExtractor
-import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.channelflow.ChannelFlowAppViewModel
-import org.jellyfin.mobile.channelflow.ChannelFlowStream
-import org.jellyfin.mobile.channelflow.ChannelFlowUrls
+import org.jellyfin.mobile.channelflow.ChannelFlowVlcEngine
+import org.videolan.libvlc.util.VLCVideoLayout
 import java.util.UUID
 
-@OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
 	channelId: UUID,
@@ -77,39 +62,16 @@ fun PlayerScreen(
 		}
 	}
 
-	val player = remember {
-		val extractors = DefaultExtractorsFactory().setTsExtractorTimestampSearchBytes(
-			1800 * TsExtractor.TS_PACKET_SIZE
-		)
-		val loadControl = DefaultLoadControl.Builder()
-			.setBufferDurationsMs(1_500, 15_000, 1_000, 1_500)
-			.build()
-		ExoPlayer.Builder(context)
-			.setLoadControl(loadControl)
-			.setMediaSourceFactory(DefaultMediaSourceFactory(context, extractors))
-			.build()
-			.apply {
-				playWhenReady = true
-				repeatMode = Player.REPEAT_MODE_OFF
-				videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
-			}
+	val engine = remember {
+		ChannelFlowVlcEngine(context) { message -> error = message }
 	}
-
-	DisposableEffect(player) {
-		val listener = object : Player.Listener {
-			override fun onPlayerError(playbackException: PlaybackException) {
-				error = playbackException.localizedMessage ?: "Playback error"
-			}
-		}
-		player.addListener(listener)
-		onDispose {
-			player.removeListener(listener)
-			player.release()
-		}
+	DisposableEffect(engine) {
+		onDispose { engine.release() }
 	}
 
 	LaunchedEffect(channelId) {
 		error = null
+		controlsVisible = true
 		val channel = viewModel.channel(channelId)
 		title = listOfNotNull(channel?.number, channel?.name).joinToString("  ")
 		val url = channel?.streamUrl
@@ -118,33 +80,20 @@ fun PlayerScreen(
 			return@LaunchedEffect
 		}
 		val apiKey = viewModel.servers.value.connection?.apiKey.orEmpty()
-		val http = DefaultHttpDataSource.Factory()
-			.setUserAgent(Util.getUserAgent(context, "ChannelFlow Mobile"))
-			.setAllowCrossProtocolRedirects(true)
-			.apply {
-				if (apiKey.isNotBlank()) {
-					setDefaultRequestProperties(mapOf("X-Api-Key" to apiKey))
-				}
-			}
-		val playUrl = if (apiKey.isNotBlank()) ChannelFlowUrls.withApiKey(url, apiKey) else url
-		val mediaItem = MediaItem.Builder()
-			.setUri(playUrl)
-			.setMimeType(
-				when (ChannelFlowStream.mimeType(playUrl)) {
-					ChannelFlowStream.MIME_HLS -> MimeTypes.APPLICATION_M3U8
-					ChannelFlowStream.MIME_TS -> MimeTypes.VIDEO_MP2T
-					else -> null
-				}
-			)
-			.build()
-		val source = if (ChannelFlowStream.isHls(playUrl)) {
-			HlsMediaSource.Factory(http).createMediaSource(mediaItem)
-		} else {
-			DefaultMediaSourceFactory(http).createMediaSource(mediaItem)
-		}
-		player.setMediaSource(source)
-		player.prepare()
-		player.play()
+		engine.play(
+			url = url,
+			name = channel.name,
+			channelId = channel.id,
+			number = channel.number,
+			logoUrl = channel.logoUrl,
+			apiKey = apiKey.ifBlank { null },
+		)
+	}
+
+	LaunchedEffect(controlsVisible, channelId) {
+		if (!controlsVisible) return@LaunchedEffect
+		delay(4_000)
+		controlsVisible = false
 	}
 
 	Box(
@@ -154,47 +103,41 @@ fun PlayerScreen(
 	) {
 		AndroidView(
 			factory = { ctx ->
-				(LayoutInflater.from(ctx).inflate(R.layout.channelflow_player_view, null) as PlayerView).apply {
+				VLCVideoLayout(ctx).apply {
 					keepScreenOn = true
-					useController = true
-					setShowNextButton(false)
-					setShowPreviousButton(false)
-					setShowFastForwardButton(false)
-					setShowRewindButton(false)
-					hidePlaybackButtons()
-					setControllerVisibilityListener(
-						PlayerView.ControllerVisibilityListener { visibility ->
-							controlsVisible = visibility == View.VISIBLE
-						},
-					)
 					layoutParams = ViewGroup.LayoutParams(
 						ViewGroup.LayoutParams.MATCH_PARENT,
 						ViewGroup.LayoutParams.MATCH_PARENT,
 					)
-					this.player = player
+					engine.attach(this)
 				}
 			},
-			update = { view ->
-				view.player = player
-				view.findViewById<View>(R.id.channel_up_button)?.setOnClickListener {
-					viewModel.zap(channelId, higher = true)
-					view.showController()
-				}
-				view.findViewById<View>(R.id.channel_down_button)?.setOnClickListener {
-					viewModel.zap(channelId, higher = false)
-					view.showController()
-				}
-			},
+			update = { layout -> engine.attach(layout) },
 			modifier = Modifier.fillMaxSize(),
 		)
+		Box(
+			modifier = Modifier
+				.fillMaxSize()
+				.clickable { controlsVisible = !controlsVisible },
+		)
 		if (controlsVisible) {
+			Box(
+				modifier = Modifier
+					.fillMaxSize()
+					.background(Color(0x60000000))
+					.clickable { controlsVisible = false },
+			)
 			IconButton(
 				onClick = { viewModel.stopPlayback() },
 				modifier = Modifier
 					.align(Alignment.TopStart)
 					.padding(8.dp),
 			) {
-				Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.lbl_back), tint = Color.White)
+				Icon(
+					Icons.AutoMirrored.Filled.ArrowBack,
+					contentDescription = stringResource(R.string.lbl_back),
+					tint = Color.White,
+				)
 			}
 			Text(
 				text = title,
@@ -204,6 +147,30 @@ fun PlayerScreen(
 					.align(Alignment.TopCenter)
 					.padding(top = 16.dp),
 			)
+			Column(
+				modifier = Modifier
+					.align(Alignment.CenterEnd)
+					.padding(end = 32.dp),
+				horizontalAlignment = Alignment.CenterHorizontally,
+			) {
+				IconButton(onClick = { viewModel.zap(channelId, higher = true) }) {
+					Icon(
+						painter = painterResource(R.drawable.ic_channel_up),
+						contentDescription = stringResource(R.string.lbl_channel_up),
+						tint = Color.White,
+					)
+				}
+				IconButton(
+					onClick = { viewModel.zap(channelId, higher = false) },
+					modifier = Modifier.padding(top = 12.dp),
+				) {
+					Icon(
+						painter = painterResource(R.drawable.ic_channel_down),
+						contentDescription = stringResource(R.string.lbl_channel_down),
+						tint = Color.White,
+					)
+				}
+			}
 		}
 		error?.let { message ->
 			Text(
@@ -214,32 +181,6 @@ fun PlayerScreen(
 					.padding(24.dp),
 			)
 		}
-	}
-}
-
-private fun PlayerView.hidePlaybackButtons() {
-	val ids = intArrayOf(
-		R.id.previous_button,
-		R.id.previous_chapter_button,
-		R.id.play_pause_container,
-		R.id.next_chapter_button,
-		R.id.next_button,
-		R.id.lock_screen_button,
-		R.id.audio_streams_button,
-		R.id.subtitles_button,
-		R.id.speed_button,
-		R.id.quality_button,
-		R.id.decoder_button,
-		R.id.info_button,
-		R.id.fullscreen_switcher,
-		androidx.media3.ui.R.id.exo_play_pause,
-		androidx.media3.ui.R.id.exo_prev,
-		androidx.media3.ui.R.id.exo_next,
-		androidx.media3.ui.R.id.exo_rew,
-		androidx.media3.ui.R.id.exo_ffwd,
-	)
-	for (id in ids) {
-		findViewById<View>(id)?.visibility = View.GONE
 	}
 }
 

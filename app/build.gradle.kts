@@ -34,7 +34,7 @@ android {
         applicationId = "org.channelflow.mobile"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionName = project.getVersionName("0.0.2")
+        versionName = project.getVersionName("0.0.3")
         versionCode = getVersionCode(versionName!!)
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -134,7 +134,7 @@ android {
     }
 }
 
-base.archivesName.set("ChannelFlow-v${project.getVersionName("0.0.2")}")
+base.archivesName.set("ChannelFlow-v${project.getVersionName("0.0.3")}")
 
 dependencies {
     val proprietaryImplementation by configurations
@@ -187,6 +187,7 @@ dependencies {
     proprietaryImplementation(libs.androidx.media3.cast)
     proprietaryImplementation(libs.bundles.playservices)
     implementation(libs.libass.media)
+    implementation(libs.libvlc.all)
 
     // Room
     implementation(libs.bundles.androidx.room)
