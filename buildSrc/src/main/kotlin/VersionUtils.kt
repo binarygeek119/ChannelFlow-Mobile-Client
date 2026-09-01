@@ -2,16 +2,15 @@ import org.gradle.api.Project
 
 /**
  * Get the version name from the current environment or use the fallback.
- * It will look for a environment variable called JELLYFIN_VERSION first.
- * Next it will look for a property called "jellyfin.version" and lastly it will use the fallback.
- * If the version in the environment starts with a "v" prefix it will be removed.
+ * Prefers CHANNELFLOW_VERSION / channelflow.version, then JELLYFIN_VERSION / jellyfin.version.
+ * If the version starts with a "v" prefix it will be removed.
  *
  * Sample output:
  * v2.0.0 -> 2.0.0
  * null -> 0.0.0-dev.1 (unless different fallback set)
  */
 fun Project.getVersionName(fallback: String = "0.0.0-dev.1") =
-    getProperty("jellyfin.version")
+    (getProperty("channelflow.version") ?: getProperty("jellyfin.version"))
         ?.removePrefix("v")
         ?: fallback
 

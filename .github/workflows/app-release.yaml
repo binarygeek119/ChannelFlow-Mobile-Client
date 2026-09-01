@@ -1,0 +1,124 @@
+name: App / Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without a v prefix (for example 0.0.1). Leave empty to use the tag or 0.0.1.
+        required: false
+        type: string
+      create_github_release:
+        description: Upload the APK to a GitHub Release
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build ChannelFlow Mobile release APK
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          version=""
+          if [ -n "$INPUT_VERSION" ]; then
+            version="$INPUT_VERSION"
+          elif [ -n "$RELEASE_TAG" ]; then
+            version="$RELEASE_TAG"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            version="$REF_NAME"
+          else
+            version="0.0.1"
+          fi
+          version="${version#v}"
+          echo "name=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "CHANNELFLOW_VERSION=$version" >> "$GITHUB_ENV"
+          echo "JELLYFIN_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version-file: .tools-versions
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      - name: Decode signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 --decode > "${GITHUB_WORKSPACE}/keystore.jks"
+            echo "KEYSTORE_FILE=${GITHUB_WORKSPACE}/keystore.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "SIGNING_KEY_ALIAS=$SIGNING_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "SIGNING_KEY_PASSWORD=$SIGNING_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "Using release keystore from secrets."
+          else
+            echo "No KEYSTORE secret. Release APK will use keystore/channelflow-release.jks."
+          fi
+
+      - name: Assemble release APK
+        run: ./gradlew :app:assembleProprietaryRelease :app:versionTxt --no-daemon
+
+      - name: Collect release APK
+        run: |
+          mkdir -p build/channelflow-publish
+          apk="$(find app/build/outputs/apk/proprietary/release -name '*.apk' ! -name '*unsigned*' | head -n 1)"
+          if [ -z "$apk" ]; then
+            echo "No signed release APK found"
+            exit 1
+          fi
+          dest="build/channelflow-publish/ChannelFlow-v${CHANNELFLOW_VERSION}-release.apk"
+          cp -v "$apk" "$dest"
+          if [ -f app/build/version.txt ]; then
+            cp app/build/version.txt build/channelflow-publish/version.txt
+          fi
+          ls -lh build/channelflow-publish
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ChannelFlow-v${{ steps.version.outputs.name }}-release
+          retention-days: 30
+          if-no-files-found: error
+          path: build/channelflow-publish/
+
+      - name: Publish APK to GitHub Release
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.create_github_release == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          TITLE: ChannelFlow Mobile ${{ steps.version.outputs.tag }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TITLE" --generate-notes
+          fi
+          gh release upload "$TAG" build/channelflow-publish/* --clobber

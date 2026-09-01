@@ -53,3 +53,7 @@ The package id is `org.channelflow.mobile`.
 ## Releases
 
 In-app updates look for GitHub Releases on [`binarygeek119/ChannelFlow-Mobile-Client`](https://github.com/binarygeek119/ChannelFlow-Mobile-Client).
+
+Pushing a `v*` tag (or running **App / Release APK** from GitHub Actions) builds the signed proprietary release APK and attaches `ChannelFlow-vX.Y.Z-release.apk` to the GitHub Release. Settings can download and install that APK.
+
+Release APKs are signed with `keystore/channelflow-release.jks` so updates install over each other. Optional repository secrets for a different production key: `KEYSTORE` (base64 of the `.jks` file), `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.

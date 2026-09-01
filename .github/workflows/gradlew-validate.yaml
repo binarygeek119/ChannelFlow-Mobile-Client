@@ -3,6 +3,7 @@ name: Gradle / Validate wrapper
 on:
   push:
     branches:
+      - main
       - master
   pull_request:
     paths:

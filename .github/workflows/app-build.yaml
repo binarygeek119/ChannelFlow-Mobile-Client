@@ -3,7 +3,9 @@ name: App / Build
 on:
   push:
     branches:
+      - main
       - master
+      - release-*
   pull_request:
 
 permissions:
@@ -24,7 +26,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
       - name: Assemble debug APKs
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleProprietaryDebug
       - name: Create publish bundle
         run: mkdir -p build/gh-app-publish/; find app/build/ -iname "*.apk" -exec mv "{}" build/gh-app-publish/ \;
       - name: Upload artifacts
