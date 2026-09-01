@@ -15,6 +15,8 @@ import timber.log.Timber
 class ChannelFlowUpdateInstallActivity : FragmentActivity() {
 	private val updater by inject<ChannelFlowUpdateChecker>()
 	private var launchedInstaller = false
+	private var waitingForPermission = false
+	private var downloadStarted = false
 
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
@@ -23,6 +25,62 @@ class ChannelFlowUpdateInstallActivity : FragmentActivity() {
 			handleInstallerStatus(intent)
 			return
 		}
+		lifecycleScope.launch {
+			updater.status.collect { status ->
+				val label = findViewById<TextView>(R.id.update_status)
+				label.text = when {
+					waitingForPermission -> getString(R.string.lbl_waiting_unknown_sources)
+					status is ChannelFlowUpdateStatus.Downloading ->
+						getString(R.string.lbl_downloading_update, status.progress)
+					status is ChannelFlowUpdateStatus.Failed ->
+						status.reason?.takeIf { it.isNotBlank() }
+							?: getString(R.string.lbl_update_install_failed)
+					else -> getString(R.string.lbl_installing_update)
+				}
+			}
+		}
+		tryStart()
+	}
+
+	override fun onResume() {
+		super.onResume()
+		if (intent.action == ChannelFlowUpdateChecker.ACTION_INSTALL_STATUS) return
+		if (waitingForPermission && !updater.needsInstallPermission()) {
+			waitingForPermission = false
+			tryStart()
+		} else if (waitingForPermission) {
+			findViewById<TextView>(R.id.update_status).text =
+				getString(R.string.lbl_waiting_unknown_sources)
+		}
+	}
+
+	override fun onNewIntent(intent: Intent) {
+		super.onNewIntent(intent)
+		setIntent(intent)
+		if (intent.action == ChannelFlowUpdateChecker.ACTION_INSTALL_STATUS) {
+			handleInstallerStatus(intent)
+		}
+	}
+
+	override fun onStop() {
+		super.onStop()
+		if (launchedInstaller && !waitingForPermission && !isChangingConfigurations) finish()
+	}
+
+	private fun tryStart() {
+		if (updater.needsInstallPermission()) {
+			waitingForPermission = true
+			findViewById<TextView>(R.id.update_status).text =
+				getString(R.string.lbl_waiting_unknown_sources)
+			runCatching { startActivity(updater.installPermissionIntent(newTask = false)) }
+				.onFailure { error ->
+					updater.onInstallFailed(error.message)
+					finish()
+				}
+			return
+		}
+		if (downloadStarted) return
+		downloadStarted = true
 		lifecycleScope.launch {
 			runCatching { updater.downloadLatest() }
 				.onSuccess { file ->
@@ -40,32 +98,6 @@ class ChannelFlowUpdateInstallActivity : FragmentActivity() {
 					finish()
 				}
 		}
-		lifecycleScope.launch {
-			updater.status.collect { status ->
-				val label = findViewById<TextView>(R.id.update_status)
-				label.text = when (status) {
-					is ChannelFlowUpdateStatus.Downloading ->
-						getString(R.string.lbl_downloading_update, status.progress)
-					is ChannelFlowUpdateStatus.Failed ->
-						status.reason?.takeIf { it.isNotBlank() }
-							?: getString(R.string.lbl_update_install_failed)
-					else -> getString(R.string.lbl_installing_update)
-				}
-			}
-		}
-	}
-
-	override fun onNewIntent(intent: Intent) {
-		super.onNewIntent(intent)
-		setIntent(intent)
-		if (intent.action == ChannelFlowUpdateChecker.ACTION_INSTALL_STATUS) {
-			handleInstallerStatus(intent)
-		}
-	}
-
-	override fun onStop() {
-		super.onStop()
-		if (launchedInstaller && !isChangingConfigurations) finish()
 	}
 
 	private fun handleInstallerStatus(intent: Intent) {

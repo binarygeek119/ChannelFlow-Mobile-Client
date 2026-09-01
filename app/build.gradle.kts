@@ -34,7 +34,7 @@ android {
         applicationId = "org.channelflow.mobile"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionName = project.getVersionName("0.0.1")
+        versionName = project.getVersionName("0.0.2")
         versionCode = getVersionCode(versionName!!)
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -75,8 +75,9 @@ android {
         }
 
         getByName("debug") {
-            applicationIdSuffix = ".debug"
             isDebuggable = true
+            // Same package and key as GitHub releases so in-app updates can replace this build.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
@@ -133,7 +134,7 @@ android {
     }
 }
 
-base.archivesName.set("ChannelFlow-v${project.getVersionName("0.0.1")}")
+base.archivesName.set("ChannelFlow-v${project.getVersionName("0.0.2")}")
 
 dependencies {
     val proprietaryImplementation by configurations

@@ -23,13 +23,21 @@ import androidx.compose.material.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -39,6 +47,7 @@ import kotlinx.coroutines.launch
 import org.jellyfin.mobile.BuildConfig
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.channelflow.ChannelFlowAppViewModel
+import org.jellyfin.mobile.channelflow.ChannelFlowUpdateChecker
 import org.jellyfin.mobile.channelflow.ChannelFlowUpdateStatus
 import org.jellyfin.mobile.channelflow.ChannelFlowVersion
 
@@ -48,6 +57,22 @@ fun SettingsScreen(viewModel: ChannelFlowAppViewModel) {
 	val update by viewModel.updateStatus.collectAsState()
 	val context = LocalContext.current
 	val scope = rememberCoroutineScope()
+	val lifecycleOwner = LocalLifecycleOwner.current
+	var canInstallPackages by remember { mutableStateOf(!viewModel.updater.needsInstallPermission()) }
+
+	LaunchedEffect(Unit) {
+		viewModel.updater.check(force = true)
+	}
+
+	DisposableEffect(lifecycleOwner) {
+		val observer = LifecycleEventObserver { _, event ->
+			if (event == Lifecycle.Event.ON_RESUME) {
+				canInstallPackages = !viewModel.updater.needsInstallPermission()
+			}
+		}
+		lifecycleOwner.lifecycle.addObserver(observer)
+		onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+	}
 
 	Column(
 		modifier = Modifier
@@ -132,60 +157,100 @@ fun SettingsScreen(viewModel: ChannelFlowAppViewModel) {
 			Spacer(Modifier.height(16.dp))
 			SectionTitle(stringResource(R.string.lbl_updates))
 			Text(
+				text = stringResource(R.string.lbl_github_updates, ChannelFlowUpdateChecker.GITHUB_REPO),
+				style = MaterialTheme.typography.caption,
+				color = Color.White.copy(alpha = 0.6f),
+				modifier = Modifier.clickable {
+					context.startActivity(
+						Intent(Intent.ACTION_VIEW, ChannelFlowUpdateChecker.RELEASES_PAGE.toUri()),
+					)
+				},
+			)
+			Spacer(Modifier.height(8.dp))
+			Text(
 				text = when (val status = update) {
 					is ChannelFlowUpdateStatus.Checking -> stringResource(R.string.lbl_checking_for_updates)
 					is ChannelFlowUpdateStatus.UpToDate ->
 						stringResource(R.string.lbl_app_up_to_date, ChannelFlowVersion.display(status.installed))
 					is ChannelFlowUpdateStatus.Available ->
-						stringResource(R.string.lbl_update_available, ChannelFlowVersion.display(status.latest))
+						if (status.apkUrl.isNullOrBlank()) {
+							stringResource(R.string.lbl_update_no_apk)
+						} else {
+							stringResource(R.string.lbl_update_available, ChannelFlowVersion.display(status.latest))
+						}
 					is ChannelFlowUpdateStatus.Downloading ->
 						stringResource(R.string.lbl_downloading_update, status.progress)
 					is ChannelFlowUpdateStatus.Installing -> stringResource(R.string.lbl_installing_update)
 					is ChannelFlowUpdateStatus.Failed ->
-						status.reason ?: stringResource(R.string.lbl_update_check_failed)
+						when {
+							status.reason.equals("No GitHub releases", ignoreCase = true) ->
+								stringResource(R.string.lbl_update_no_releases)
+							!status.reason.isNullOrBlank() -> status.reason
+							else -> stringResource(R.string.lbl_update_check_failed)
+						}
 					ChannelFlowUpdateStatus.Idle -> stringResource(R.string.lbl_check_for_updates)
 				},
 				style = MaterialTheme.typography.body2,
 				color = Color.White,
 			)
 			Spacer(Modifier.height(8.dp))
+			val busy = update is ChannelFlowUpdateStatus.Downloading ||
+				update is ChannelFlowUpdateStatus.Installing
 			Button(
 				onClick = {
-					val status = update
-					if (status is ChannelFlowUpdateStatus.Available && !status.apkUrl.isNullOrBlank()) {
-						if (viewModel.updater.needsInstallPermission()) {
-							context.startActivity(viewModel.updater.installPermissionIntent())
-						} else {
-							viewModel.updater.startInstall(context)
+					when (val status = update) {
+						is ChannelFlowUpdateStatus.Downloading,
+						is ChannelFlowUpdateStatus.Installing,
+							-> Unit
+						is ChannelFlowUpdateStatus.Available -> {
+							if (status.apkUrl.isNullOrBlank()) {
+								context.startActivity(Intent(Intent.ACTION_VIEW, status.pageUrl.toUri()))
+							} else {
+								viewModel.updater.startInstall(context)
+							}
 						}
-					} else {
-						scope.launch { viewModel.updater.check(force = true) }
+						is ChannelFlowUpdateStatus.Failed -> {
+							if (!viewModel.updater.retryInstall(context)) {
+								scope.launch { viewModel.updater.check(force = true) }
+							}
+						}
+						else -> scope.launch { viewModel.updater.check(force = true) }
 					}
 				},
+				enabled = !busy,
 				modifier = Modifier.fillMaxWidth(),
 				colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.surface),
 			) {
 				Text(
-					if (update is ChannelFlowUpdateStatus.Available) {
-						stringResource(R.string.lbl_install_update)
-					} else {
-						stringResource(R.string.lbl_check_for_updates)
+					when (val status = update) {
+						is ChannelFlowUpdateStatus.Downloading ->
+							stringResource(R.string.lbl_downloading_update, status.progress)
+						is ChannelFlowUpdateStatus.Installing ->
+							stringResource(R.string.lbl_installing_update)
+						is ChannelFlowUpdateStatus.Available -> when {
+							status.apkUrl.isNullOrBlank() ->
+								stringResource(R.string.lbl_open_github_release)
+							!canInstallPackages ->
+								stringResource(R.string.lbl_allow_unknown_sources)
+							else -> stringResource(R.string.lbl_install_update)
+						}
+						else -> stringResource(R.string.lbl_check_for_updates)
 					},
 					color = Color.White,
 				)
 			}
 			val available = update as? ChannelFlowUpdateStatus.Available
-			if (available != null) {
-				Text(
-					text = stringResource(R.string.lbl_open_github_release),
-					color = Color.White,
-					modifier = Modifier
-						.padding(top = 8.dp)
-						.clickable {
-							context.startActivity(Intent(Intent.ACTION_VIEW, available.pageUrl.toUri()))
-						},
-				)
-			}
+			Text(
+				text = stringResource(R.string.lbl_open_github_release),
+				color = Color.White,
+				modifier = Modifier
+					.padding(top = 8.dp)
+					.clickable {
+						val url = available?.pageUrl?.ifBlank { null }
+							?: ChannelFlowUpdateChecker.RELEASES_PAGE
+						context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+					},
+			)
 
 			Spacer(Modifier.height(24.dp))
 			SectionTitle(stringResource(R.string.lbl_about))

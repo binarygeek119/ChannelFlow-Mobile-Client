@@ -209,17 +209,26 @@
     <string name="lbl_channel_up">Channel up</string>
     <string name="lbl_channel_down">Channel down</string>
     <string name="lbl_updates">Updates</string>
+    <string name="lbl_github_updates">GitHub: %1$s</string>
     <string name="lbl_about">About</string>
     <string name="lbl_check_for_updates">Check for updates</string>
     <string name="lbl_checking_for_updates">Checking GitHub…</string>
     <string name="lbl_app_up_to_date">You have the latest version (%1$s)</string>
     <string name="lbl_update_available">Update available: %1$s</string>
     <string name="lbl_update_check_failed">Could not check GitHub for updates</string>
+    <string name="lbl_update_no_releases">No GitHub releases yet</string>
+    <string name="lbl_update_no_apk">Update found, but no APK is attached to the GitHub release</string>
     <string name="lbl_open_github_release">Open GitHub release</string>
     <string name="lbl_install_update">Download and install</string>
     <string name="lbl_downloading_update">Downloading update… %1$d%%</string>
     <string name="lbl_installing_update">Installing update…</string>
     <string name="lbl_update_install_failed">Could not install the update</string>
+    <string name="lbl_update_ready">Update available</string>
+    <string name="msg_update_ready">ChannelFlow Mobile %1$s is ready to install. You have %2$s.</string>
+    <string name="lbl_install_now">Install now</string>
+    <string name="lbl_later">Later</string>
+    <string name="lbl_allow_unknown_sources">Allow ChannelFlow to install updates</string>
+    <string name="lbl_waiting_unknown_sources">Allow this app to install unknown apps, then return here.</string>
     <string name="msg_update_signature_mismatch">This update cannot replace the app already installed. Uninstall ChannelFlow, keep app data if asked, then install the new APK.</string>
     <string name="msg_update_package_mismatch">This APK is a different ChannelFlow package. Uninstall the copy you are replacing, then install the new APK.</string>
 </resources>

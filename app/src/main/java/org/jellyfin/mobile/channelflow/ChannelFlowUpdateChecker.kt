@@ -97,16 +97,23 @@ class ChannelFlowUpdateChecker(
 	fun needsInstallPermission(): Boolean =
 		Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !app.packageManager.canRequestPackageInstalls()
 
-	fun installPermissionIntent(): Intent =
+	fun installPermissionIntent(newTask: Boolean = true): Intent =
 		Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${app.packageName}"))
-			.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+			.apply { if (newTask) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
 
 	fun startInstall(context: Context) {
+		when (_status.value) {
+			is ChannelFlowUpdateStatus.Downloading,
+			is ChannelFlowUpdateStatus.Installing,
+				-> return
+			else -> Unit
+		}
 		val available = pending ?: _status.value as? ChannelFlowUpdateStatus.Available
 		if (available?.apkUrl.isNullOrBlank()) {
 			_status.value = ChannelFlowUpdateStatus.Failed("no apk")
 			return
 		}
+		pending = available
 		val intent = Intent(context, ChannelFlowUpdateInstallActivity::class.java)
 		if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 		context.startActivity(intent)
@@ -147,7 +154,7 @@ class ChannelFlowUpdateChecker(
 		val latest = ChannelFlowVersion.normalize(release.tagName.ifBlank { release.name.orEmpty() })
 		if (latest.isBlank()) return ChannelFlowUpdateStatus.Failed("empty tag")
 		val pageUrl = release.htmlUrl.ifBlank { RELEASES_PAGE }
-		val apk = pickApkAsset(release.assets, preferDebug = BuildConfig.DEBUG)
+		val apk = pickApkAsset(release.assets, preferDebug = false)
 		return if (ChannelFlowVersion.isNewer(latest, installed)) {
 			ChannelFlowUpdateStatus.Available(
 				installed = installed,
@@ -293,8 +300,9 @@ class ChannelFlowUpdateChecker(
 	private fun apkFile(): File = File(File(app.cacheDir, "updates"), "channelflow-mobile-update.apk")
 
 	private suspend fun fetchLatest(): GithubRelease = withContext(Dispatchers.IO) {
-		fetchRelease(LATEST_URL) ?: fetchReleaseList().firstOrNull()
-			?: error("No GitHub releases")
+		val latest = fetchRelease(LATEST_URL)?.takeUnless { it.prerelease || it.draft }
+		val listed = fetchReleaseList().filterNot { it.prerelease || it.draft }
+		latest ?: listed.firstOrNull() ?: error("No GitHub releases")
 	}
 
 	private fun fetchRelease(url: String): GithubRelease? {
