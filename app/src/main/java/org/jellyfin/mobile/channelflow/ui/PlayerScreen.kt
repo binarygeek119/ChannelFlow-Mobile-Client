@@ -64,7 +64,11 @@ fun PlayerScreen(
 
 	val activity = context.findActivity()
 	val engine = remember(activity) {
-		ChannelFlowVlcEngine(activity ?: context) { message -> error = message }
+		ChannelFlowVlcEngine(
+			context = activity ?: context,
+			onError = { message -> error = message },
+			onPlaying = { error = null },
+		)
 	}
 	DisposableEffect(engine) {
 		onDispose { engine.release() }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
@@ -16,6 +17,7 @@ import java.util.UUID
 class ChannelFlowVlcEngine(
 	context: Context,
 	private val onError: (String) -> Unit,
+	private val onPlaying: () -> Unit = {},
 ) {
 	private val app = context.applicationContext
 	private val main = Handler(Looper.getMainLooper())
@@ -25,8 +27,34 @@ class ChannelFlowVlcEngine(
 	private var attached = false
 	private var lastUrl: String? = null
 	private var lastApiKey: String? = null
-	private var retriedSoft = false
+	private var lastName: String? = null
+	private var lastChannelId: UUID? = null
+	private var lastNumber: String? = null
+	private var lastLogoUrl: String? = null
 	private var pending: PendingPlay? = null
+	private var released = false
+	private var reconnectPosted = false
+	private var ignoreStopped = false
+	private var awaitingFirstFrame = false
+	private var consecutiveFailures = 0
+	private var lastProgressAt = 0L
+	private var lastPlayerTime = -1L
+	private var sawTimeAdvance = false
+	private var bufferingPercent = 100f
+
+	private val watchdog = object : Runnable {
+		override fun run() {
+			if (released) return
+			checkStall()
+			main.postDelayed(this, ChannelFlowLiveReconnect.WATCHDOG_MS)
+		}
+	}
+
+	private val reconnect = Runnable {
+		reconnectPosted = false
+		if (released || lastUrl == null) return@Runnable
+		startStream(preferHardware = ChannelFlowLiveReconnect.preferHardware(consecutiveFailures))
+	}
 
 	init {
 		libVlc = LibVLC(
@@ -69,13 +97,18 @@ class ChannelFlowVlcEngine(
 		logoUrl: String?,
 		apiKey: String?,
 	) {
+		cancelReconnect()
+		consecutiveFailures = 0
 		pending = PendingPlay(url, name, channelId, number, logoUrl, apiKey)
 		if (attached) startPending()
 		else layout?.post { startPending() }
 	}
 
 	fun release() {
+		released = true
 		pending = null
+		cancelReconnect()
+		main.removeCallbacks(watchdog)
 		runCatching { player.stop() }
 		if (attached) {
 			runCatching { player.detachViews() }
@@ -87,7 +120,7 @@ class ChannelFlowVlcEngine(
 	}
 
 	private fun bindViews(videoLayout: VLCVideoLayout) {
-		if (layout !== videoLayout) return
+		if (released || layout !== videoLayout) return
 		if (!attached) {
 			runCatching {
 				// TextureView composites inside Compose; SurfaceView often stays black.
@@ -105,35 +138,58 @@ class ChannelFlowVlcEngine(
 
 	private fun startPending() {
 		val request = pending ?: return
-		if (!attached) return
+		if (!attached || released) return
 		pending = null
 		lastUrl = request.url
 		lastApiKey = request.apiKey
-		retriedSoft = false
+		lastName = request.name
+		lastChannelId = request.channelId
+		lastNumber = request.number
+		lastLogoUrl = request.logoUrl
+		ensureWatchdog()
+		startStream(preferHardware = true, usePlaylist = true)
+	}
+
+	private fun startStream(preferHardware: Boolean, usePlaylist: Boolean = false) {
+		val url = lastUrl ?: return
+		if (!attached || released) return
+		awaitingFirstFrame = true
+		lastProgressAt = SystemClock.elapsedRealtime()
+		lastPlayerTime = -1L
+		sawTimeAdvance = false
+		bufferingPercent = 100f
 		runCatching {
-			val playlist = ChannelFlowVlcPlaylist.write(
-				file = File(File(app.cacheDir, "vlc"), "channel.m3u"),
-				streamUrl = request.url,
-				name = request.name ?: "ChannelFlow",
-				channelId = request.channelId,
-				number = request.number,
-				logoUrl = request.logoUrl,
-				apiKey = request.apiKey,
+			ignoreStopped = true
+			runCatching { player.stop() }
+			val playUrl = ChannelFlowLiveReconnect.withCacheBust(
+				ChannelFlowVlcPlaylist.withApiKey(url, lastApiKey),
+				System.currentTimeMillis(),
 			)
-			val playUrl = ChannelFlowVlcPlaylist.streamUrlFrom(playlist.readText())
-				?: ChannelFlowVlcPlaylist.withApiKey(request.url, request.apiKey)
-			val media = mediaFromPlaylist(playlist) ?: mediaFromUrl(playUrl, preferHardware = true)
+			val media = if (usePlaylist) {
+				val playlist = ChannelFlowVlcPlaylist.write(
+					file = File(File(app.cacheDir, "vlc"), "channel.m3u"),
+					streamUrl = url,
+					name = lastName ?: "ChannelFlow",
+					channelId = lastChannelId,
+					number = lastNumber,
+					logoUrl = lastLogoUrl,
+					apiKey = lastApiKey,
+				)
+				mediaFromPlaylist(playlist, preferHardware) ?: mediaFromUrl(playUrl, preferHardware)
+			} else {
+				mediaFromUrl(playUrl, preferHardware)
+			}
 			player.media = media
 			media.release()
 			player.play()
 			Timber.i("VLC playing live url=%s", ChannelFlowStream.redact(playUrl))
 		}.onFailure { error ->
 			Timber.e(error, "VLC failed to start stream")
-			onError(error.message ?: "Playback error")
+			scheduleReconnect("start-failed")
 		}
 	}
 
-	private fun mediaFromPlaylist(file: File): Media? {
+	private fun mediaFromPlaylist(file: File, preferHardware: Boolean): Media? {
 		val playlist = Media(libVlc, file.absolutePath)
 		var stream: Media? = null
 		try {
@@ -142,7 +198,7 @@ class ChannelFlowVlcEngine(
 			try {
 				if (items.count <= 0) return null
 				stream = items.getMediaAt(0) as? Media ?: return null
-				applyStreamOptions(stream, preferHardware = true)
+				applyStreamOptions(stream, preferHardware)
 			} finally {
 				items.release()
 			}
@@ -181,40 +237,98 @@ class ChannelFlowVlcEngine(
 	}
 
 	private fun onEvent(event: MediaPlayer.Event) {
+		if (released) return
 		when (event.type) {
-			MediaPlayer.Event.Opening -> Timber.i("VLC opening stream")
-			MediaPlayer.Event.Playing -> Timber.i("VLC playing")
-			MediaPlayer.Event.Vout -> Timber.i("VLC video output ready")
+			MediaPlayer.Event.Opening -> {
+				ignoreStopped = false
+				markProgress()
+				Timber.i("VLC opening stream")
+			}
+			MediaPlayer.Event.Buffering -> {
+				bufferingPercent = event.buffering
+			}
+			MediaPlayer.Event.Playing -> {
+				ignoreStopped = false
+				awaitingFirstFrame = false
+				consecutiveFailures = 0
+				markProgress()
+				onPlaying()
+				Timber.i("VLC playing")
+			}
+			MediaPlayer.Event.Vout -> {
+				awaitingFirstFrame = false
+				markProgress()
+				Timber.i("VLC video output ready")
+			}
+			MediaPlayer.Event.TimeChanged -> {
+				val time = player.time
+				if (time != lastPlayerTime) {
+					if (lastPlayerTime >= 0) sawTimeAdvance = true
+					lastPlayerTime = time
+					markProgress()
+				}
+			}
 			MediaPlayer.Event.EndReached -> {
-				Timber.w("VLC live stream ended; restarting")
-				restart(preferHardware = true)
+				Timber.w("VLC live stream ended; reconnecting")
+				scheduleReconnect("ended")
 			}
 			MediaPlayer.Event.EncounteredError -> {
-				val url = lastUrl
-				if (!retriedSoft && url != null) {
-					retriedSoft = true
-					Timber.w("VLC playback error; retrying without hardware decode")
-					restart(preferHardware = false)
-				} else {
-					Timber.e("VLC playback error")
-					onError("Playback error")
+				Timber.w("VLC playback error; reconnecting")
+				scheduleReconnect("error")
+			}
+			MediaPlayer.Event.Stopped -> {
+				if (!ignoreStopped && lastUrl != null && !reconnectPosted) {
+					Timber.w("VLC live stream stopped; reconnecting")
+					scheduleReconnect("stopped")
 				}
 			}
 		}
 	}
 
-	private fun restart(preferHardware: Boolean) {
-		val url = lastUrl ?: return
-		val playUrl = ChannelFlowVlcPlaylist.withApiKey(url, lastApiKey)
-		runCatching {
-			val media = mediaFromUrl(playUrl, preferHardware)
-			player.media = media
-			media.release()
-			player.play()
-		}.onFailure { error ->
-			Timber.e(error, "VLC restart failed")
-			onError(error.message ?: "Playback error")
+	private fun markProgress() {
+		lastProgressAt = SystemClock.elapsedRealtime()
+	}
+
+	private fun checkStall() {
+		if (released || reconnectPosted || lastUrl == null || !attached) return
+		if (!ChannelFlowLiveReconnect.isStalled(
+				nowMs = SystemClock.elapsedRealtime(),
+				lastProgressMs = lastProgressAt,
+				awaitingFirstFrame = awaitingFirstFrame,
+				sawTimeAdvance = sawTimeAdvance,
+				bufferingPercent = bufferingPercent,
+			)
+		) {
+			return
 		}
+		val reason = if (awaitingFirstFrame) "open-timeout" else "stall"
+		Timber.w("VLC live %s; reconnecting", reason)
+		scheduleReconnect(reason)
+	}
+
+	private fun scheduleReconnect(reason: String) {
+		if (released || lastUrl == null || reconnectPosted) return
+		reconnectPosted = true
+		ignoreStopped = true
+		val delay = ChannelFlowLiveReconnect.delayMs(consecutiveFailures)
+		consecutiveFailures += 1
+		onError("Reconnecting…")
+		Timber.i("VLC live reconnect in %sms (%s, attempt %s)", delay, reason, consecutiveFailures)
+		main.removeCallbacks(reconnect)
+		main.postDelayed(reconnect, delay)
+		runCatching { player.stop() }
+	}
+
+	private fun cancelReconnect() {
+		reconnectPosted = false
+		ignoreStopped = false
+		main.removeCallbacks(reconnect)
+	}
+
+	private fun ensureWatchdog() {
+		if (released) return
+		main.removeCallbacks(watchdog)
+		main.postDelayed(watchdog, ChannelFlowLiveReconnect.WATCHDOG_MS)
 	}
 
 	private data class PendingPlay(
