@@ -5,6 +5,14 @@ import java.util.UUID
 
 object ChannelFlowVlcPlaylist {
 	const val USER_AGENT = "ChannelFlow-Mobile"
+	/** Jitter buffer before playback starts (ms). Keep short so zapping stays snappy. */
+	const val START_CACHE_MS = 1500
+	/**
+	 * Background prefetch cap in KiB (~10 minutes at 8 Mbps IPTV HD).
+	 * VLC fills this as fast as the server will send, then holds until playback consumes it.
+	 */
+	const val PREFETCH_BUFFER_KIB = 614_400
+	const val PREFETCH_READ_BYTES = 1_048_576
 
 	fun text(
 		streamUrl: String,
@@ -28,8 +36,11 @@ object ChannelFlowVlcPlaylist {
 			appendLine("#EXTM3U")
 			appendLine(extinf)
 			appendLine("#EXTVLCOPT:http-user-agent=$USER_AGENT")
-			appendLine("#EXTVLCOPT:network-caching=1500")
-			appendLine("#EXTVLCOPT:live-caching=1500")
+			appendLine("#EXTVLCOPT:network-caching=$START_CACHE_MS")
+			appendLine("#EXTVLCOPT:live-caching=$START_CACHE_MS")
+			appendLine("#EXTVLCOPT:stream-filter=prefetch")
+			appendLine("#EXTVLCOPT:prefetch-buffer-size=$PREFETCH_BUFFER_KIB")
+			appendLine("#EXTVLCOPT:prefetch-read-size=$PREFETCH_READ_BYTES")
 			appendLine("#EXTVLCOPT:http-reconnect=true")
 			if (!apiKey.isNullOrBlank()) appendLine("#EXTVLCOPT:http-header=X-Api-Key: $apiKey")
 			appendLine(playUrl)

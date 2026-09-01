@@ -32,8 +32,11 @@ class ChannelFlowVlcEngine(
 		libVlc = LibVLC(
 			context,
 			arrayListOf(
-				"--network-caching=1500",
-				"--live-caching=1500",
+				"--network-caching=${ChannelFlowVlcPlaylist.START_CACHE_MS}",
+				"--live-caching=${ChannelFlowVlcPlaylist.START_CACHE_MS}",
+				"--stream-filter=prefetch",
+				"--prefetch-buffer-size=${ChannelFlowVlcPlaylist.PREFETCH_BUFFER_KIB}",
+				"--prefetch-read-size=${ChannelFlowVlcPlaylist.PREFETCH_READ_BYTES}",
 				"--http-reconnect",
 				"--http-user-agent=${ChannelFlowVlcPlaylist.USER_AGENT}",
 				"--aout=opensles",
@@ -160,12 +163,15 @@ class ChannelFlowVlcEngine(
 
 	private fun applyStreamOptions(media: Media, preferHardware: Boolean) {
 		media.setHWDecoderEnabled(preferHardware, true)
-		media.addOption(":network-caching=1500")
+		media.addOption(":network-caching=${ChannelFlowVlcPlaylist.START_CACHE_MS}")
 		media.addOption(":http-reconnect")
 		media.addOption(":http-user-agent=${ChannelFlowVlcPlaylist.USER_AGENT}")
 		val apiKey = lastApiKey
 		if (!apiKey.isNullOrBlank()) media.addOption(":http-header=X-Api-Key: $apiKey")
-		media.addOption(":live-caching=1500")
+		media.addOption(":live-caching=${ChannelFlowVlcPlaylist.START_CACHE_MS}")
+		media.addOption(":stream-filter=prefetch")
+		media.addOption(":prefetch-buffer-size=${ChannelFlowVlcPlaylist.PREFETCH_BUFFER_KIB}")
+		media.addOption(":prefetch-read-size=${ChannelFlowVlcPlaylist.PREFETCH_READ_BYTES}")
 		media.addOption(":clock-jitter=0")
 		media.addOption(":clock-synchro=0")
 		val url = media.uri?.toString() ?: lastUrl.orEmpty()
