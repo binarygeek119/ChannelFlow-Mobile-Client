@@ -29,6 +29,10 @@
 # Keep AndroidX ComponentFactory
 -keep class androidx.core.app.CoreComponentFactory { *; }
 
+# Keep VLC JNI bindings
+-keep class org.videolan.** { *; }
+-dontwarn org.videolan.**
+
 # Assume SDK >= 21 to remove unnecessary compat code
 -assumevalues class android.os.Build$VERSION {
   int SDK_INT return 21..2147483647;

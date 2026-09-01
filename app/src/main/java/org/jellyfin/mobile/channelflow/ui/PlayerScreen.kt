@@ -62,8 +62,9 @@ fun PlayerScreen(
 		}
 	}
 
-	val engine = remember {
-		ChannelFlowVlcEngine(context) { message -> error = message }
+	val activity = context.findActivity()
+	val engine = remember(activity) {
+		ChannelFlowVlcEngine(activity ?: context) { message -> error = message }
 	}
 	DisposableEffect(engine) {
 		onDispose { engine.release() }
@@ -80,14 +81,18 @@ fun PlayerScreen(
 			return@LaunchedEffect
 		}
 		val apiKey = viewModel.servers.value.connection?.apiKey.orEmpty()
-		engine.play(
-			url = url,
-			name = channel.name,
-			channelId = channel.id,
-			number = channel.number,
-			logoUrl = channel.logoUrl,
-			apiKey = apiKey.ifBlank { null },
-		)
+		runCatching {
+			engine.play(
+				url = url,
+				name = channel.name,
+				channelId = channel.id,
+				number = channel.number,
+				logoUrl = channel.logoUrl,
+				apiKey = apiKey.ifBlank { null },
+			)
+		}.onFailure { failed ->
+			error = failed.message ?: "Playback error"
+		}
 	}
 
 	LaunchedEffect(controlsVisible, channelId) {
