@@ -9,7 +9,7 @@
 
 ChannelFlow Mobile is the phone and tablet app for watching live IPTV from a [ChannelFlow](https://github.com/binarygeek119/ChannelFlow) server. It opens to the live guide, plays M3U streams, and pairs with a server using a quick pin. There is no Jellyfin login and no DVR.
 
-It is a fork of [Jellyfin for Android](https://github.com/jellyfin/jellyfin-android), rebuilt around the same ChannelFlow pairing, guide, API key, and log-shipping behavior as [ChannelFlow TV](https://github.com/binarygeek119/ChannelFlow-Client).
+It is a fork of [Jellyfin for Android](https://github.com/jellyfin/jellyfin-android), rebuilt around the same ChannelFlow pairing, guide, API key, and log-shipping behavior as [ChannelFlow TV](https://github.com/binarygeek119/ChannelFlow-TV-Client).
 
 Author: [binarygeek119](https://github.com/binarygeek119)
 
