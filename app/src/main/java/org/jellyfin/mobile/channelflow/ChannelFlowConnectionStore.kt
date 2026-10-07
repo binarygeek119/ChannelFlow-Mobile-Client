@@ -39,7 +39,7 @@ class ChannelFlowConnectionStore(
 
 	fun save(connection: ChannelFlowConnection) {
 		val current = _state.value
-		val existing = current.servers.firstOrNull { it.connection.baseUrl.equals(connection.baseUrl, ignoreCase = true) }
+		val existing = current.servers.firstOrNull { it.connection.sharesServer(connection) }
 		val server = existing?.copy(connection = connection)
 			?: ChannelFlowSavedServer(id = UUID.randomUUID().toString(), connection = connection)
 		val servers = current.servers.filterNot { it.id == server.id } + server

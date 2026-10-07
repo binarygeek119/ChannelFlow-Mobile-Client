@@ -47,6 +47,7 @@ import kotlinx.coroutines.launch
 import org.jellyfin.mobile.BuildConfig
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.channelflow.ChannelFlowAppViewModel
+import org.jellyfin.mobile.channelflow.ChannelFlowNetworkKind
 import org.jellyfin.mobile.channelflow.ChannelFlowUpdateChecker
 import org.jellyfin.mobile.channelflow.ChannelFlowUpdateStatus
 import org.jellyfin.mobile.channelflow.ChannelFlowVersion
@@ -55,6 +56,7 @@ import org.jellyfin.mobile.channelflow.ChannelFlowVersion
 fun SettingsScreen(viewModel: ChannelFlowAppViewModel) {
 	val servers by viewModel.servers.collectAsState()
 	val update by viewModel.updateStatus.collectAsState()
+	val resolved by viewModel.resolvedEndpoint.collectAsState()
 	val context = LocalContext.current
 	val scope = rememberCoroutineScope()
 	val lifecycleOwner = LocalLifecycleOwner.current
@@ -108,7 +110,11 @@ fun SettingsScreen(viewModel: ChannelFlowAppViewModel) {
 				color = MaterialTheme.colors.primary,
 			)
 			Text(
-				text = stringResource(R.string.pref_connection_description),
+				text = when (resolved?.kind) {
+					ChannelFlowNetworkKind.LOCAL -> stringResource(R.string.lbl_using_local_network)
+					ChannelFlowNetworkKind.PUBLIC -> stringResource(R.string.lbl_using_internet)
+					else -> stringResource(R.string.pref_connection_description)
+				},
 				style = MaterialTheme.typography.caption,
 				color = Color.White.copy(alpha = 0.6f),
 			)

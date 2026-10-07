@@ -72,6 +72,36 @@ object ChannelFlowUrls {
 
 	fun clientLogsUrl(baseUrl: String): String = ChannelFlowClientLogs.ingestUrl(baseUrl)
 
+	fun hostOf(url: String): String? =
+		runCatching { Uri.parse(url).host }.getOrNull()?.takeIf { it.isNotBlank() }
+
+	fun portOf(url: String): Int {
+		val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return 80
+		val port = uri.port
+		if (port > 0) return port
+		return if (uri.scheme.equals("https", ignoreCase = true)) 443 else 80
+	}
+
+	fun rewriteToward(url: String, fromBases: Iterable<String>, toBase: String): String {
+		if (url.isBlank()) return url
+		val target = toBase.trimEnd('/')
+		if (target.isBlank()) return url
+		var result = url
+		for (from in fromBases) {
+			val source = from.trimEnd('/')
+			if (source.isBlank() || source.equals(target, ignoreCase = true)) continue
+			if (result.startsWith(source, ignoreCase = true)) {
+				result = target + result.substring(source.length)
+			}
+		}
+		return result
+	}
+
+	fun rewriteMediaUrl(url: String?, connection: ChannelFlowConnection, chosen: ChannelFlowEndpoint): String? {
+		if (url.isNullOrBlank()) return url
+		return rewriteToward(url, connection.knownBaseUrls(), chosen.baseUrl)
+	}
+
 	private fun encodeQuery(value: String): String =
 		URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 

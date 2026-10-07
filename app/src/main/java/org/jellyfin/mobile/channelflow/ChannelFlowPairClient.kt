@@ -156,17 +156,7 @@ class ChannelFlowPairClient {
 
 	private fun connectionFromCiphertext(pin: String, ciphertext: String): ChannelFlowConnection {
 		val payload = ChannelFlowPinCrypto.decrypt(pin, ciphertext)
-		val m3u = payload.m3u
-		val epg = payload.xmltv
-		if (m3u.isBlank() || epg.isBlank()) {
-			error("Pin payload did not include M3U and XMLTV URLs")
-		}
-		return ChannelFlowConnection(
-			baseUrl = ChannelFlowUrls.baseUrlFromLiveTvUrl(m3u),
-			m3uUrl = m3u,
-			epgUrl = epg,
-			apiKey = ChannelFlowUrls.extractApiKey(m3u).ifBlank { ChannelFlowUrls.extractApiKey(epg) },
-		)
+		return ChannelFlowConnection.fromPinPayload(payload)
 	}
 }
 

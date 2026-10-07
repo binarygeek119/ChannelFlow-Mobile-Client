@@ -57,6 +57,17 @@ class ChannelFlowConnectionPersistenceTests : FunSpec({
 		decoded.connection?.apiKey shouldBe "secret-key"
 	}
 
+	test("restores a connection that predates public and local URLs") {
+		val encoded = """
+			{"connection":{"baseUrl":"http://10.0.0.8:8096","m3uUrl":"http://10.0.0.8:8096/iptv/channels.m3u","epgUrl":"http://10.0.0.8:8096/iptv/xmltv.xml","apiKey":"secret-key"},"favoriteChannelIds":[]}
+		""".trimIndent()
+
+		val decoded = ChannelFlowConnectionPersistence.decode(encoded).shouldNotBeNull()
+		decoded.connection shouldBe connection
+		decoded.connection?.local shouldBe null
+		decoded.connection?.public shouldBe null
+	}
+
 	test("does not treat corrupt json as an empty server list") {
 		ChannelFlowConnectionPersistence.decode("{not-json") shouldBe null
 		ChannelFlowConnectionPersistence.decode("") shouldBe null

@@ -21,6 +21,8 @@ class ChannelFlowApiKeyTests : FunSpec({
 		next.m3uUrl.shouldNotContain("plugin-key")
 		next.epgUrl shouldContain "apiKey=unique-tv-key"
 		next.epgUrl.shouldNotContain("plugin-key")
+		next.local shouldBe null
+		next.public shouldBe null
 	}
 
 	test("leaves the connection alone when the key is unchanged") {

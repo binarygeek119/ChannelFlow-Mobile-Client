@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,7 @@ fun PlayerScreen(
 	viewModel: ChannelFlowAppViewModel,
 ) {
 	val context = LocalContext.current
+	val generation by viewModel.networkGeneration.collectAsState()
 	var title by remember { mutableStateOf("") }
 	var error by remember { mutableStateOf<String?>(null) }
 	var controlsVisible by remember { mutableStateOf(true) }
@@ -74,7 +76,7 @@ fun PlayerScreen(
 		onDispose { engine.release() }
 	}
 
-	LaunchedEffect(channelId) {
+	LaunchedEffect(channelId, generation) {
 		error = null
 		controlsVisible = true
 		val channel = viewModel.channel(channelId)

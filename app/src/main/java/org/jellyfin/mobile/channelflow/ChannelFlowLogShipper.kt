@@ -28,6 +28,7 @@ class ChannelFlowLogShipper(
 	context: Context,
 	private val store: ChannelFlowConnectionStore,
 	private val access: ChannelFlowAccessGuard,
+	private val resolver: ChannelFlowEndpointResolver,
 ) {
 	private val app = context.applicationContext
 	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -113,36 +114,40 @@ class ChannelFlowLogShipper(
 	}
 
 	private suspend fun post(connection: ChannelFlowConnection, batch: List<ChannelFlowLogEntry>): Boolean =
-		withContext(Dispatchers.IO) {
-			val payload = ChannelFlowLogBatch(
-				deviceId = ChannelFlowDevice.id(app),
-				deviceName = ChannelFlowDevice.name(app),
-				appVersion = ChannelFlowDevice.appVersion(),
-				osVersion = ChannelFlowDevice.osVersion(),
-				entries = batch,
-			)
-			val body = json.encodeToString(ChannelFlowLogBatch.serializer(), payload)
-				.toRequestBody(JSON)
-			val request = Request.Builder()
-				.url(ChannelFlowClientLogs.ingestUrl(connection.baseUrl))
-				.header("X-Api-Key", connection.apiKey)
-				.header("Accept", "application/json")
-				.header("User-Agent", USER_AGENT)
-				.post(body)
-				.build()
-			http.newCall(request).execute().use { response ->
-				when {
-					response.isSuccessful -> true
-					response.code == 401 || response.code == 403 -> {
-						dropUntilReconnect = true
-						access.forgetUnauthorized(connection)
-						true
+		runCatching {
+			resolver.call(connection) { endpoint ->
+				withContext(Dispatchers.IO) {
+					val payload = ChannelFlowLogBatch(
+						deviceId = ChannelFlowDevice.id(app),
+						deviceName = ChannelFlowDevice.name(app),
+						appVersion = ChannelFlowDevice.appVersion(),
+						osVersion = ChannelFlowDevice.osVersion(),
+						entries = batch,
+					)
+					val body = json.encodeToString(ChannelFlowLogBatch.serializer(), payload)
+						.toRequestBody(JSON)
+					val request = Request.Builder()
+						.url(ChannelFlowClientLogs.ingestUrl(endpoint.baseUrl))
+						.header("X-Api-Key", connection.apiKey)
+						.header("Accept", "application/json")
+						.header("User-Agent", USER_AGENT)
+						.post(body)
+						.build()
+					http.newCall(request).execute().use { response ->
+						when {
+							response.isSuccessful -> true
+							response.code == 401 || response.code == 403 -> {
+								dropUntilReconnect = true
+								access.forgetUnauthorized(connection)
+								true
+							}
+							response.code in 400..499 -> true
+							else -> error("HTTP ${response.code} shipping logs")
+						}
 					}
-					response.code in 400..499 -> true
-					else -> false
 				}
 			}
-		}
+		}.getOrDefault(false)
 
 	private fun wrapUncaughtExceptions() {
 		val previous = Thread.getDefaultUncaughtExceptionHandler()

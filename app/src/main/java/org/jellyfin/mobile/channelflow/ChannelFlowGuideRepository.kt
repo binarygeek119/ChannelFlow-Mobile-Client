@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -34,6 +35,7 @@ data class ChannelGuideItem(
 class ChannelFlowGuideRepository(
 	private val store: ChannelFlowConnectionStore,
 	private val access: Lazy<ChannelFlowAccessGuard>,
+	private val resolver: ChannelFlowEndpointResolver,
 ) {
 	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 	private val mutex = Mutex()
@@ -52,6 +54,23 @@ class ChannelFlowGuideRepository(
 		.followSslRedirects(true)
 		.dns(Ipv4FirstDns)
 		.build()
+
+	init {
+		scope.launch {
+			var first = true
+			resolver.networkGeneration.collect { _ ->
+				if (first) {
+					first = false
+					return@collect
+				}
+				loadedAt = 0L
+				loadJob?.cancel()
+				loadJob = null
+				channelsReady.value = false
+				programsReady.value = false
+			}
+		}
+	}
 
 	fun prefetchLatest() {
 		if (!store.isConnected) return
@@ -217,9 +236,16 @@ class ChannelFlowGuideRepository(
 		supervisorScope {
 			launch {
 				try {
-					val nextChannels = M3uParser.parse(fetchText(connection, connection.m3uUrl))
+					val (endpoint, text) = fetchWithFallback(connection) { it.m3uUrl }
+					val nextChannels = M3uParser.parse(text).map { channel ->
+						channel.copy(
+							streamUrl = ChannelFlowUrls.rewriteMediaUrl(channel.streamUrl, connection, endpoint)
+								.orEmpty(),
+							logoUrl = ChannelFlowUrls.rewriteMediaUrl(channel.logoUrl, connection, endpoint),
+						)
+					}
 					mutex.withLock { channels = nextChannels }
-					Timber.i("Loaded ${nextChannels.size} ChannelFlow channels")
+					Timber.i("Loaded ${nextChannels.size} ChannelFlow channels via ${endpoint.baseUrl}")
 				} catch (_: CancellationException) {
 					return@launch
 				} catch (error: Exception) {
@@ -230,7 +256,12 @@ class ChannelFlowGuideRepository(
 			}
 			launch {
 				try {
-					val nextPrograms = XmltvParser.parse(fetchText(connection, connection.epgUrl))
+					val (endpoint, text) = fetchWithFallback(connection) { it.epgUrl }
+					val nextPrograms = XmltvParser.parse(text).map { program ->
+						program.copy(
+							iconUrl = ChannelFlowUrls.rewriteMediaUrl(program.iconUrl, connection, endpoint),
+						)
+					}
 					mutex.withLock {
 						programs = nextPrograms
 						loadedAt = System.currentTimeMillis()
@@ -241,7 +272,7 @@ class ChannelFlowGuideRepository(
 					if (guideNow != deviceNow) {
 						Timber.w("Device clock $deviceNow is outside XMLTV coverage; guide using $guideNow")
 					}
-					Timber.i("Loaded ${nextPrograms.size} ChannelFlow XMLTV programmes")
+					Timber.i("Loaded ${nextPrograms.size} ChannelFlow XMLTV programmes via ${endpoint.baseUrl}")
 				} catch (_: CancellationException) {
 					return@launch
 				} catch (error: Exception) {
@@ -258,6 +289,14 @@ class ChannelFlowGuideRepository(
 		return !stale && channels.isNotEmpty() && programsReady.value && loadedAt > 0L
 	}
 
+	private suspend fun fetchWithFallback(
+		connection: ChannelFlowConnection,
+		pick: (ChannelFlowEndpoint) -> String,
+	): Pair<ChannelFlowEndpoint, String> =
+		resolver.call(connection) { endpoint ->
+			endpoint to fetchText(connection, pick(endpoint))
+		}
+
 	private suspend fun fetchText(connection: ChannelFlowConnection, url: String): String = withContext(Dispatchers.IO) {
 		val request = Request.Builder()
 			.url(withApiKey(url, connection.apiKey))
@@ -271,7 +310,7 @@ class ChannelFlowGuideRepository(
 		http.newCall(request).execute().use { response ->
 			if (response.code == 401 || response.code == 403) {
 				access.value.forgetUnauthorized(connection)
-				error("HTTP ${response.code} unauthorized for ${redact(url)}")
+				throw ChannelFlowUnauthorizedException("HTTP ${response.code} unauthorized for ${redact(url)}")
 			}
 			if (!response.isSuccessful) error("HTTP ${response.code} for ${redact(url)}")
 			val bytes = response.body?.bytes() ?: ByteArray(0)

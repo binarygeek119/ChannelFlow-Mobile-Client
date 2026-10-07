@@ -6,12 +6,13 @@ import org.koin.dsl.module
 
 val channelFlowModule = module {
 	single { ChannelFlowConnectionStore(androidContext()) }
-	single { ChannelFlowGuideRepository(get(), lazy { get() }) }
+	single { ChannelFlowEndpointResolver(androidContext()) }
+	single { ChannelFlowGuideRepository(get(), lazy { get() }, get()) }
 	single { ChannelFlowAccessGuard(androidContext(), get(), get()) }
-	single { ChannelFlowClientSession(androidContext(), get(), get(), get()) }
-	single { ChannelFlowLogShipper(androidContext(), get(), get()) }
+	single { ChannelFlowClientSession(androidContext(), get(), get(), get(), get()) }
+	single { ChannelFlowLogShipper(androidContext(), get(), get(), get()) }
 	single { ChannelFlowPairClient() }
 	single { ChannelFlowUpdateChecker(androidContext()) }
 	single { ChannelFlowReminderScheduler(androidContext()) }
-	viewModel { ChannelFlowAppViewModel(get(), get(), get(), get(), get(), get(), get()) }
+	viewModel { ChannelFlowAppViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
 }

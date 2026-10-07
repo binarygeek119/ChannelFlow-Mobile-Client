@@ -190,6 +190,8 @@
     <string name="msg_quick_pin_expired">This pin expired. Try again for a new pin.</string>
     <string name="pref_connection">Remote server</string>
     <string name="pref_connection_description">Connect with a quick pin from ChannelFlow</string>
+    <string name="lbl_using_local_network">Using local network</string>
+    <string name="lbl_using_internet">Using internet</string>
     <string name="lbl_add_server">Add server</string>
     <string name="lbl_switch_server">Switch server</string>
     <string name="lbl_remove_server">Remove server</string>

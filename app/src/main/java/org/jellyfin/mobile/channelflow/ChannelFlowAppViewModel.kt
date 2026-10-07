@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -41,12 +43,21 @@ class ChannelFlowAppViewModel(
 	val updater: ChannelFlowUpdateChecker,
 	val reminders: ChannelFlowReminderScheduler,
 	private val access: ChannelFlowAccessGuard,
+	private val resolver: ChannelFlowEndpointResolver,
 ) : ViewModel() {
 	private val _ui = MutableStateFlow(initialState())
 	val ui: StateFlow<ChannelFlowUiState> = _ui.asStateFlow()
 	val servers = store.state.stateIn(viewModelScope, SharingStarted.Eagerly, store.state.value)
 	val updateStatus = updater.status
 	val pendingReminder = reminders.pending
+	val networkGeneration = resolver.networkGeneration
+	val resolvedEndpoint = combine(store.state, resolver.networkGeneration) { state, _ ->
+		state.connection?.let { resolver.resolve(it) }
+	}.stateIn(
+		viewModelScope,
+		SharingStarted.Eagerly,
+		store.connection?.let { resolver.resolve(it) },
+	)
 
 	private var pairJob: Job? = null
 
@@ -70,6 +81,13 @@ class ChannelFlowAppViewModel(
 				while (isActive) {
 					delay(30_000)
 					if (_ui.value.screen is ChannelFlowScreen.Guide) refreshGuide()
+				}
+			}
+			viewModelScope.launch {
+				resolver.networkGeneration.collect { gen ->
+					if (gen == 0) return@collect
+					if (_ui.value.screen is ChannelFlowScreen.Pair) return@collect
+					refreshGuide(force = true)
 				}
 			}
 		} else {

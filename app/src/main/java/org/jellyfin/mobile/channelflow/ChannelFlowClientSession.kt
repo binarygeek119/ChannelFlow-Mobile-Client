@@ -23,6 +23,7 @@ class ChannelFlowClientSession(
 	private val store: ChannelFlowConnectionStore,
 	private val access: ChannelFlowAccessGuard,
 	private val catalog: ChannelFlowGuideRepository,
+	private val resolver: ChannelFlowEndpointResolver,
 ) {
 	private val app = context.applicationContext
 	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -52,12 +53,17 @@ class ChannelFlowClientSession(
 				runCatching { refresh() }
 			}
 		}
+		scope.launch {
+			resolver.networkGeneration.collect {
+				runCatching { refresh() }
+			}
+		}
 	}
 
 	suspend fun refresh() {
 		val connection = store.connection ?: return
 		if (connection.apiKey.isBlank() || connection.baseUrl.isBlank()) return
-		when (val result = postSession(connection)) {
+		when (val result = runCatching { postSession(connection) }.getOrDefault(SessionOutcome.Ignored)) {
 			is SessionOutcome.Rejected -> access.forgetUnauthorized(connection)
 			is SessionOutcome.Updated -> {
 				if (result.apiKey.isNotBlank() && result.apiKey != connection.apiKey) {
@@ -74,46 +80,51 @@ class ChannelFlowClientSession(
 	suspend fun revoke(connection: ChannelFlowConnection) {
 		if (connection.apiKey.isBlank() || connection.baseUrl.isBlank()) return
 		runCatching {
-			withContext(Dispatchers.IO) {
-				val request = Request.Builder()
-					.url(ChannelFlowUrls.revokeUrl(connection.baseUrl))
-					.header("X-Api-Key", connection.apiKey)
-					.header("Accept", "application/json")
-					.delete()
-					.build()
-				http.newCall(request).execute().close()
+			resolver.call(connection) { endpoint ->
+				withContext(Dispatchers.IO) {
+					val request = Request.Builder()
+						.url(ChannelFlowUrls.revokeUrl(endpoint.baseUrl))
+						.header("X-Api-Key", connection.apiKey)
+						.header("Accept", "application/json")
+						.delete()
+						.build()
+					http.newCall(request).execute().close()
+				}
 			}
 		}
 	}
 
 	private suspend fun postSession(connection: ChannelFlowConnection): SessionOutcome =
-		withContext(Dispatchers.IO) {
-			val payload = json.encodeToString(
-				SessionRequest.serializer(),
-				SessionRequest(
-					deviceId = ChannelFlowDevice.id(app),
-					deviceName = ChannelFlowDevice.name(app),
-					appVersion = ChannelFlowDevice.appVersion(),
-					osVersion = ChannelFlowDevice.osVersion(),
-				),
-			)
-			val request = Request.Builder()
-				.url(ChannelFlowUrls.sessionUrl(connection.baseUrl))
-				.header("X-Api-Key", connection.apiKey)
-				.header("Accept", "application/json")
-				.header("Content-Type", "application/json")
-				.post(payload.toRequestBody(JSON))
-				.build()
-			http.newCall(request).execute().use { response ->
-				when {
-					response.code == 401 || response.code == 403 -> SessionOutcome.Rejected
-					!response.isSuccessful -> SessionOutcome.Ignored
-					else -> {
-						val body = response.body?.string().orEmpty()
-						val parsed = runCatching {
-							json.decodeFromString(SessionResponse.serializer(), body)
-						}.getOrNull()
-						SessionOutcome.Updated(parsed?.apiKey.orEmpty())
+		resolver.call(connection) { endpoint ->
+			withContext(Dispatchers.IO) {
+				val payload = json.encodeToString(
+					SessionRequest.serializer(),
+					SessionRequest(
+						deviceId = ChannelFlowDevice.id(app),
+						deviceName = ChannelFlowDevice.name(app),
+						appVersion = ChannelFlowDevice.appVersion(),
+						osVersion = ChannelFlowDevice.osVersion(),
+					),
+				)
+				val request = Request.Builder()
+					.url(ChannelFlowUrls.sessionUrl(endpoint.baseUrl))
+					.header("X-Api-Key", connection.apiKey)
+					.header("Accept", "application/json")
+					.header("Content-Type", "application/json")
+					.post(payload.toRequestBody(JSON))
+					.build()
+				http.newCall(request).execute().use { response ->
+					when {
+						response.code == 401 || response.code == 403 -> SessionOutcome.Rejected
+						response.code >= 500 -> error("HTTP ${response.code} for session")
+						!response.isSuccessful -> SessionOutcome.Ignored
+						else -> {
+							val body = response.body?.string().orEmpty()
+							val parsed = runCatching {
+								json.decodeFromString(SessionResponse.serializer(), body)
+							}.getOrNull()
+							SessionOutcome.Updated(parsed?.apiKey.orEmpty())
+						}
 					}
 				}
 			}
